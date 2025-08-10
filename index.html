@@ -3,48 +3,38 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
-<title>Дистанция до объекта на земле (угол места + Δground)</title>
+<title>Дистанция до объекта (камера + угол)</title>
 <style>
-  :root{
-    --bg:#0f1115;--card:#161a22;--txt:#e9eef7;--mut:#9aa3b2;--acc:#3d7eff;--ok:#22c55e;--warn:#f59e0b;--rad:14px
-  }
+  :root{--bg:#0f1115;--card:#161a22;--txt:#e9eef7;--mut:#9aa3b2;--acc:#3d7eff;--rad:14px}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt);font:16px ui-rounded,system-ui,-apple-system,Segoe UI,Roboto,Arial}
-  .wrap{max-width:860px;margin:0 auto;padding:16px;display:grid;gap:16px}
+  .wrap{max-width:900px;margin:0 auto;padding:16px;display:grid;gap:16px}
   h1{margin:0;font-size:clamp(18px,5vw,22px)}
   .card{background:var(--card);border-radius:var(--rad);padding:14px;box-shadow:0 6px 24px rgba(0,0,0,.25)}
   label{font-size:13px;color:var(--mut)}
   .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-  input,button{
-    width:100%;border-radius:12px;border:1px solid #273041;background:#0e1218;color:var(--txt);
-    padding:10px 12px;font-size:16px
-  }
-  input[type="checkbox"]{width:auto}
+  input,button{width:100%;border-radius:12px;border:1px solid #273041;background:#0e1218;color:var(--txt);padding:10px 12px;font-size:16px}
   button{background:var(--acc);border:none;font-weight:600;cursor:pointer}
   button.ghost{background:#1a2130;border:1px solid #2a3446}
-  .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#1b2230;border:1px solid #2a3446;font-size:12px;color:var(--mut)}
   .metrics{display:flex;gap:10px;flex-wrap:wrap}
+  .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#1b2230;border:1px solid #2a3446;font-size:12px;color:var(--mut)}
   .big{font-size:clamp(18px,6vw,28px);font-weight:700}
-  .hint{font-size:13px;color:var(--mut)}
-  .view{position:relative;height:40vh;min-height:220px;border-radius:12px;background:#0b0e13;overflow:hidden}
-  .view::before,.view::after{content:"";position:absolute;background:rgba(255,255,255,.22)}
-  .view::before{width:1px;height:100%;left:50%;top:0}
-  .view::after{height:1px;width:100%;left:0;top:50%}
-  .rowSm{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-  .mut{color:var(--mut);font-size:12px}
+  /* Видеовидоискатель */
+  .view{position:relative;border-radius:12px;overflow:hidden;background:#000;height:52vh;min-height:260px}
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);} /* зеркалим, как прицельная камера */
+  canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="card">
-    <h1>Дистанция до точки на земле (учёт перепада высот)</h1>
-    <div class="hint">Калибруй «горизонт», введи высоту камеры и Δground, наведи центр на <b>основание</b> цели и жми «Замер» несколько раз — берём среднее.</div>
+    <h1>Дистанция до точки на земле (камера+сенсоры)</h1>
     <div class="metrics">
       <span class="pill">Угол вниз α: <span id="ang">—</span>°</span>
       <span class="pill">Смещение нуля: <span id="off">0.0</span>°</span>
       <span class="pill">Сглажено N: <span id="n">—</span></span>
-      <span class="pill">Инверсия pitch: <input id="invert" type="checkbox" /></span>
+      <span class="pill">Инверсия pitch: <input id="invert" type="checkbox"/></span>
     </div>
   </div>
 
@@ -59,38 +49,29 @@
         <input id="dGround" type="number" inputmode="decimal" step="0.1" placeholder="напр. 2 или -3">
       </div>
     </div>
-    <div class="row" style="margin-top:10px">
-      <div>
-        <label>Среднее по замерам (1–10)</label>
-        <input id="avgN" type="number" inputmode="numeric" step="1" min="1" max="10" value="5">
-      </div>
-      <div class="rowSm">
-        <button id="start" class="ghost">Start sensors</button>
-        <button id="calib">Калибровка горизонта</button>
-      </div>
-    </div>
-    <div class="mut" style="margin-top:8px">
-      Знак Δground: цель <b>выше</b> тебя → «+», цель <b>ниже</b> → «−». Пример: стоишь на дамбе, цель внизу на ~3 м → Δground = −3.
+    <div class="row3" style="margin-top:10px">
+      <button id="startCam" class="ghost">Start camera</button>
+      <button id="start" class="ghost">Start sensors</button>
+      <button id="calib">Калибровка горизонта</button>
     </div>
   </div>
 
-  <div class="card view" id="view"></div>
+  <div class="card view">
+    <video id="vid" autoplay playsinline muted></video>
+    <canvas id="ovr"></canvas>
+  </div>
 
   <div class="card">
     <div class="big">Горизонтальная дальность D<sub>h</sub>: <span id="Dh">—</span></div>
     <div class="big">Наклонная дальность D<sub>s</sub>: <span id="Ds">—</span></div>
     <div class="big">Исп. Δground: <span id="dg">0.0</span> м</div>
-    <div class="hint">Формулы: D<sub>h</sub> = (h<sub>cam</sub> − Δground)/tan(α), D<sub>s</sub> = (h<sub>cam</sub> − Δground)/sin(α). α — угол вниз от горизонта до основания цели.</div>
-    <div class="row" style="margin-top:10px">
+    <div style="margin-top:10px" class="row3">
       <button id="measure">Замер</button>
       <button id="reset" class="ghost">Сбросить</button>
+      <button id="freeze" class="ghost">Заморозить кадр</button>
     </div>
-  </div>
-
-  <div class="card">
-    <div class="hint">
-      Советы: держи телефон стабильно; делай 3–7 замеров; если значение α «идёт вверх», включи «Инверсия pitch» и повтори калибровку.
-      На очень малых углах (далёкие цели) ошибка растёт — лучше сделать несколько серий.
+    <div style="margin-top:8px;color:#9aa3b2;font-size:13px">
+      Наведи перекрестие на <b>основание</b> цели. Для дальних целей сделай 3–7 замеров — берётся среднее.
     </div>
   </div>
 </div>
@@ -100,15 +81,71 @@
   const $ = id => document.getElementById(id);
   const ui = { ang:$('ang'), off:$('off'), n:$('n'), Dh:$('Dh'), Ds:$('Ds'), dg:$('dg') };
 
-  let offsetDeg = 0;      // сдвиг «нуля» (горизонта), градусы
-  let pitchDeg = null;    // текущий «наклон вниз», до нормализации
-  let samplesH = [];      // горизонтальные расстояния (для усреднения)
-  let samplesS = [];      // наклонные расстояния
+  // ====== Камера ======
+  const video = $('vid');
+  const canvas = $('ovr');
+  const ctx = canvas.getContext('2d');
+  let frozen = false;
+
+  $('startCam').addEventListener('click', async ()=>{
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal:'environment' }, width:{ideal:1920}, height:{ideal:1080} },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+      resize();
+      window.addEventListener('resize', resize);
+      requestAnimationFrame(drawOverlay);
+      $('startCam').disabled = true;
+    }catch(e){ alert('Нет доступа к камере: '+e); }
+  });
+
+  function resize(){
+    const r = video.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(r.width * dpr);
+    canvas.height = Math.round(r.height * dpr);
+    canvas.style.width = r.width+'px';
+    canvas.style.height = r.height+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+
+  function drawOverlay(){
+    if (!frozen) {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      // перекрестие
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      const cx = w/2, cy = h/2;
+      ctx.strokeStyle = 'rgba(255,255,255,.85)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
+      ctx.moveTo(0, cy); ctx.lineTo(w, cy);
+      ctx.stroke();
+
+      // подпись угла
+      ctx.font = '14px system-ui, -apple-system';
+      ctx.fillStyle = 'rgba(233,238,247,.9)';
+      ctx.fillText('Наведи центр на основание цели', 12, 22);
+    }
+    requestAnimationFrame(drawOverlay);
+  }
+
+  $('freeze').addEventListener('click', ()=>{
+    frozen = !frozen;
+    $('freeze').textContent = frozen ? 'Разморозить кадр' : 'Заморозить кадр';
+  });
+
+  // ====== Сенсоры и расчёт ======
+  let offsetDeg = 0;      // 0-уровень (горизонт)
+  let pitchDeg = null;    // текущий «наклон вниз»
   let invertPitch = false;
+  let samplesH = [], samplesS = [];
 
-  $('invert').addEventListener('change', (e)=>{ invertPitch = e.target.checked; });
+  $('invert').addEventListener('change', e => invertPitch = e.target.checked);
 
-  // Запуск сенсоров
   $('start').addEventListener('click', async ()=>{
     try{
       if (typeof DeviceOrientationEvent !== 'undefined' &&
@@ -122,78 +159,56 @@
     }catch(e){ alert('Ошибка доступа к датчикам: '+e); }
   });
 
-  // Калибровка горизонта: наведи камеру строго на линию горизонта (или дальнюю ровную линию) и нажми
   $('calib').addEventListener('click', ()=>{
-    if (pitchDeg == null) { alert('Нет данных датчиков. Нажми Start sensors.'); return; }
-    offsetDeg = pitchDeg; // текущий наклон принимаем за 0°
+    if (pitchDeg == null) { alert('Нет данных сенсоров. Нажми Start sensors.'); return; }
+    offsetDeg = pitchDeg;
     ui.off.textContent = offsetDeg.toFixed(1);
-    alert('Калибровка выполнена: текущий наклон принят за 0°.');
+    alert('Калибровка: текущий наклон принят за 0° (горизонт). Наводи на базу цели и меряй.');
   });
 
-  // Замер
   $('measure').addEventListener('click', ()=>{
     const hCam = parseFloat($('hCam').value);
     const dGround = parseFloat($('dGround').value || '0');
-    const avgN = clamp(1, 10, parseInt($('avgN').value || '5', 10));
+    const avgN = clamp(1, 10, parseInt(document.getElementById('avgN')?.value || '5', 10)); // если поля нет, берём 5
 
     if (!(hCam>0)) { alert('Укажи корректную высоту камеры (м).'); return; }
-    if (pitchDeg == null) { alert('Нет данных датчиков.'); return; }
+    if (pitchDeg == null) { alert('Нет данных сенсоров.'); return; }
 
-    // α — угол вниз от горизонта
-    let alphaDeg = (pitchDeg - offsetDeg);
-    const alphaRad = alphaDeg * Math.PI / 180;
+    const alphaDeg = (pitchDeg - offsetDeg);
+    const a = alphaDeg * Math.PI / 180;
+    const deltaZ = hCam - dGround;
 
-    const deltaZ = hCam - dGround; // вертикальная разница между глазами и основанием цели
-
-    if (alphaRad === 0) { alert('Угол 0°. Наведи центр на основание цели ниже или выше горизонта.'); return; }
-
-    // Проверим согласованность знаков (если целишься вверх при deltaZ>0, и наоборот)
-    // Физически корректная D_h должна быть > 0.
-    const Dh = deltaZ / Math.tan(alphaRad);
-    const Ds = deltaZ / Math.sin(alphaRad);
+    const Dh = deltaZ / Math.tan(a);
+    const Ds = deltaZ / Math.sin(a);
 
     if (!isFinite(Dh) || !isFinite(Ds) || Dh <= 0 || Ds <= 0) {
-      alert('Похоже, геометрия противоречива. Проверь знак Δground и куда навёл перекрестие, затем повтори калибровку.');
+      alert('Похоже, геометрия противоречива. Проверь калибровку и знак Δground.');
       return;
     }
 
-    samplesH.push(Dh);
-    samplesS.push(Ds);
-    // усечение по окну усреднения
+    samplesH.push(Dh); samplesS.push(Ds);
     while (samplesH.length > avgN) samplesH.shift();
     while (samplesS.length > avgN) samplesS.shift();
 
-    const meanH = mean(samplesH);
-    const meanS = mean(samplesS);
-
-    ui.Dh.textContent = meanH.toFixed(2) + ' м';
-    ui.Ds.textContent = meanS.toFixed(2) + ' м';
+    ui.Dh.textContent = mean(samplesH).toFixed(2) + ' м';
+    ui.Ds.textContent = mean(samplesS).toFixed(2) + ' м';
     ui.dg.textContent = dGround.toFixed(1) + ' м';
     ui.n.textContent  = String(samplesH.length);
   });
 
   $('reset').addEventListener('click', ()=>{
-    samplesH = []; samplesS = [];
-    ui.Dh.textContent = '—';
-    ui.Ds.textContent = '—';
-    ui.n.textContent  = '—';
+    samplesH=[]; samplesS=[];
+    ui.Dh.textContent='—'; ui.Ds.textContent='—'; ui.n.textContent='—';
   });
 
-  // Чтение ориентации: используем beta как «pitch», на разных устройствах знак может отличаться
   function onOri(e){
     let beta = e.beta; // -180..180
     if (beta == null) return;
-
-    // Нормализация: хотим, чтобы «вниз» давал положительные числа.
-    // Если checkbox инверсии включён, меняем знак.
     pitchDeg = invertPitch ? -beta : beta;
-
-    // отображаем α = (pitch - offset)
     const alphaDisp = pitchDeg - offsetDeg;
     ui.ang.textContent = alphaDisp.toFixed(1);
   }
 
-  // helpers
   function clamp(a,b,x){ return Math.max(a, Math.min(b,x)); }
   function mean(arr){ return arr.reduce((s,v)=>s+v,0)/arr.length; }
 })();
