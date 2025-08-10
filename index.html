@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
-<title>Дистанция до объекта (камера + угол)</title>
+<title>Дистанция до объекта (камера + исправленный угол)</title>
 <style>
   :root{--bg:#0f1115;--card:#161a22;--txt:#e9eef7;--mut:#9aa3b2;--acc:#3d7eff;--rad:14px}
   *{box-sizing:border-box}
@@ -20,9 +20,8 @@
   .metrics{display:flex;gap:10px;flex-wrap:wrap}
   .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#1b2230;border:1px solid #2a3446;font-size:12px;color:var(--mut)}
   .big{font-size:clamp(18px,6vw,28px);font-weight:700}
-  /* Видеовидоискатель */
   .view{position:relative;border-radius:12px;overflow:hidden;background:#000;height:52vh;min-height:260px}
-  video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);} /* зеркалим, как прицельная камера */
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);}
   canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 </style>
 </head>
@@ -115,7 +114,6 @@
   function drawOverlay(){
     if (!frozen) {
       ctx.clearRect(0,0,canvas.width,canvas.height);
-      // перекрестие
       const w = canvas.clientWidth, h = canvas.clientHeight;
       const cx = w/2, cy = h/2;
       ctx.strokeStyle = 'rgba(255,255,255,.85)';
@@ -124,8 +122,6 @@
       ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
       ctx.moveTo(0, cy); ctx.lineTo(w, cy);
       ctx.stroke();
-
-      // подпись угла
       ctx.font = '14px system-ui, -apple-system';
       ctx.fillStyle = 'rgba(233,238,247,.9)';
       ctx.fillText('Наведи центр на основание цели', 12, 22);
@@ -140,7 +136,7 @@
 
   // ====== Сенсоры и расчёт ======
   let offsetDeg = 0;      // 0-уровень (горизонт)
-  let pitchDeg = null;    // текущий «наклон вниз»
+  let alphaDownDeg = null; // угол НИЖЕ горизонта (то, что нам нужно)
   let invertPitch = false;
   let samplesH = [], samplesS = [];
 
@@ -153,28 +149,28 @@
         const p = await DeviceOrientationEvent.requestPermission();
         if (p !== 'granted') { alert('Доступ к датчикам отклонён.'); return; }
       }
-      window.addEventListener('deviceorientation', onOri, true);
-      window.addEventListener('deviceorientationabsolute', onOri, true);
+      window.addEventListener('deviceorientation', handleOrientation, true);
+      window.addEventListener('deviceorientationabsolute', handleOrientation, true);
       $('start').disabled = true;
     }catch(e){ alert('Ошибка доступа к датчикам: '+e); }
   });
 
   $('calib').addEventListener('click', ()=>{
-    if (pitchDeg == null) { alert('Нет данных сенсоров. Нажми Start sensors.'); return; }
-    offsetDeg = pitchDeg;
+    if (alphaDownDeg == null) { alert('Нет данных сенсоров. Нажми Start sensors.'); return; }
+    offsetDeg = alphaDownDeg;
     ui.off.textContent = offsetDeg.toFixed(1);
-    alert('Калибровка: текущий наклон принят за 0° (горизонт). Наводи на базу цели и меряй.');
+    alert('Калибровка: текущий наклон принят за 0° (горизонт). Наводи на основание цели и меряй.');
   });
 
   $('measure').addEventListener('click', ()=>{
     const hCam = parseFloat($('hCam').value);
     const dGround = parseFloat($('dGround').value || '0');
-    const avgN = clamp(1, 10, parseInt(document.getElementById('avgN')?.value || '5', 10)); // если поля нет, берём 5
+    const avgN = clamp(1, 10, 5); // фикс. окно усреднения (можно сделать отдельное поле)
 
     if (!(hCam>0)) { alert('Укажи корректную высоту камеры (м).'); return; }
-    if (pitchDeg == null) { alert('Нет данных сенсоров.'); return; }
+    if (alphaDownDeg == null) { alert('Нет данных сенсоров.'); return; }
 
-    const alphaDeg = (pitchDeg - offsetDeg);
+    const alphaDeg = (alphaDownDeg - offsetDeg);
     const a = alphaDeg * Math.PI / 180;
     const deltaZ = hCam - dGround;
 
@@ -201,14 +197,59 @@
     ui.Dh.textContent='—'; ui.Ds.textContent='—'; ui.n.textContent='—';
   });
 
-  function onOri(e){
-    let beta = e.beta; // -180..180
-    if (beta == null) return;
-    pitchDeg = invertPitch ? -beta : beta;
-    const alphaDisp = pitchDeg - offsetDeg;
+  // ====== Правильный расчёт угла «вниз от горизонта» для любой ориентации ======
+  function handleOrientation(e){
+    // Углы устройства (W3C): alpha (Z), beta (X), gamma (Y)
+    const α = (e.alpha ?? 0) * Math.PI/180;
+    const β = (e.beta  ?? 0) * Math.PI/180;
+    const γ = (e.gamma ?? 0) * Math.PI/180;
+
+    // Угол поворота экрана (портрет/ландшафт)
+    const scr = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    const s = (scr || 0) * Math.PI/180;
+
+    // Матрицы вращения
+    const Rz = (a)=>[ [ Math.cos(a),-Math.sin(a),0],
+                      [ Math.sin(a), Math.cos(a),0],
+                      [ 0,0,1] ];
+    const Rx = (a)=>[ [1,0,0],
+                      [0, Math.cos(a),-Math.sin(a)],
+                      [0, Math.sin(a), Math.cos(a)] ];
+    const Ry = (a)=>[ [ Math.cos(a),0, Math.sin(a)],
+                      [0,1,0],
+                      [-Math.sin(a),0, Math.cos(a)] ];
+    function mul(A,B){
+      return [
+        [A[0][0]*B[0][0]+A[0][1]*B[1][0]+A[0][2]*B[2][0],
+         A[0][0]*B[0][1]+A[0][1]*B[1][1]+A[0][2]*B[2][1],
+         A[0][0]*B[0][2]+A[0][1]*B[1][2]+A[0][2]*B[2][2]],
+        [A[1][0]*B[0][0]+A[1][1]*B[1][0]+A[1][2]*B[2][0],
+         A[1][0]*B[0][1]+A[1][1]*B[1][1]+A[1][2]*B[2][1],
+         A[1][0]*B[0][2]+A[1][1]*B[1][2]+A[1][2]*B[2][2]],
+        [A[2][0]*B[0][0]+A[2][1]*B[1][0]+A[2][2]*B[2][0],
+         A[2][0]*B[0][1]+A[2][1]*B[1][1]+A[2][2]*B[2][1],
+         A[2][0]*B[0][2]+A[2][1]*B[1][2]+A[2][2]*B[2][2]]
+      ];
+    }
+
+    // Ротация устройства к миру (порядок W3C: Z * X' * Y'), плюс поворот экрана
+    let R = mul(Rz(α), mul(Rx(β), mul(Ry(γ), Rz(s))));
+
+    // Ось "вперёд" камеры — минус Z устройства, в мировых координатах:
+    const f = { x: -R[0][2], y: -R[1][2], z: -R[2][2] };
+
+    // Угол НИЖЕ горизонта: 0° на горизонте, +вниз, −вверх
+    let aRad = Math.atan2( -f.z, Math.hypot(f.x, f.y) );
+    if (invertPitch) aRad = -aRad;
+
+    alphaDownDeg = aRad * 180/Math.PI;
+
+    // Показать относительный калиброванный угол
+    const alphaDisp = alphaDownDeg - offsetDeg;
     ui.ang.textContent = alphaDisp.toFixed(1);
   }
 
+  // helpers
   function clamp(a,b,x){ return Math.max(a, Math.min(b,x)); }
   function mean(arr){ return arr.reduce((s,v)=>s+v,0)/arr.length; }
 })();
